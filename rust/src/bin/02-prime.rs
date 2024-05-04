@@ -1,4 +1,4 @@
-use std::{io::{Error, Read, Write}, net::{Shutdown, TcpStream}, thread::sleep, time::Duration, vec};
+use std::{io::{Error, Read, Write}, net::{Shutdown, TcpStream}, ops::Index, thread::sleep, time::Duration, vec};
 use protohackers::tcp_accept_and_spawn;
 use serde::Deserialize;
 use serde::Serialize;
@@ -12,7 +12,7 @@ struct RpcRequest {
 }
 
 /// {"method": "isPrime", "prime": true}\n
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct IsPrimeRpcResponse {
     method: String,
     prime: bool
@@ -34,62 +34,59 @@ struct MessageReader {
 
 
 impl MessageReader {
-    fn new(&mut self, stream: TcpStream, delimiter: u8) {
-        self.stream = stream;
-        self.delimiter = delimiter;
-        self.buf = [0; 128];
-        self.req = vec![];
-    }
-
-    fn read(&self) -> u8 {
-        todo!();
-        //let read = self.stream.read(buf)
-    }
-}
-fn handle_request(mut tcpstream: TcpStream) -> Result<(), Error> {
-    // get the data
-    let mut buf:[u8;256] = [0; 256];
-    let mut req: Vec<u8> = vec![];
-    while let Ok(read) = tcpstream.read(&mut buf) {
-        // println!("{:?}", &buf);
-        let data = &buf[..read];
-        if read == 0 {
-            tcpstream.shutdown(Shutdown::Both)?;
-            return Ok(());
+    fn new(stream: TcpStream, delimiter: u8) -> MessageReader {
+        MessageReader{
+            stream,
+            delimiter,
+            buf: [0; 128],
+            req: vec![],
         }
-        req.extend(data.iter());
-        println!("Concatenating req: {}", String::from_utf8_lossy(&req));
+    }
 
-        if let Some((newline_index, _)) = req.iter().enumerate().find(|(_index, value)| *value == &10) {
-            let req_finished = Vec::from(&req[..=newline_index]);
-            let s = String::from_utf8(req_finished.clone()).unwrap();
-            println!("Finished request: {}", s.clone());
-            req = req.iter().skip(newline_index+1).cloned().collect();
-            println!("Resetting request to [{}]", String::from_utf8_lossy(&req));
-            // parse the data
-            let maybe_req: Result<RpcRequest, serde_json::Error> = from_slice(&req_finished);
-            println!("Parsed result: {:?}", maybe_req);
-
-            // malformed gets sent back, good requests are processed
-            match maybe_req {
-                Err(_) => {
-                    tcpstream.write_all(req.as_slice())?;
-                },
-                Ok(parsed_req) => {
-                    println!("Parsed request: {:?}", parsed_req);
-                    let resp = IsPrimeRpcResponse{ method: "isPrime".to_owned(), prime: is_primez(parsed_req.number)};
-                    let mut resp_vec = serde_json::to_vec(&resp)?;
-                    println!("Deserialized json: {:?}", String::from_utf8(resp_vec.clone()));
-                    resp_vec.append(&mut vec![10]);
-                    tcpstream.write_all(resp_vec.as_slice())?;
-                }
+    fn next_message(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        loop {
+            let read = self.stream.read(&mut self.buf)?;
+            if read == 0 {
+                return Ok(None);
             }
 
+            if let Some((index, _)) = self.buf.iter().enumerate().find(|(_,v)| **v == self.delimiter) {
+                if index - 1 == self.req.len(){
+                    self.req.clear();
+                } else {
+                    self.req = self.buf[index+1..].to_vec();
+                }
+                let left = &self.buf[0..index];
+                return Ok(Some(left.to_vec()));
+            }
+        }
+    }
+}
+
+fn handle_request(stream: TcpStream) -> Result<(), Error> {
+    let mut reader = MessageReader::new(stream, 10);
+    while let Some(msg) = reader.next_message().transpose() {
+        let msg = match msg {
+            Err(e) => return Err(e),
+            Ok(m) => m
+        };
+        println!("Message: {}", String::from_utf8_lossy(&msg));
+        match serde_json::from_slice::<RpcRequest>(&msg) {
+            Ok(parsed) if parsed.method == "isPrime" => {
+                println!("Parsed: {:?}", parsed);
+                let resp = IsPrimeRpcResponse{method: "isPrime".to_owned(), prime: is_primez(parsed.number)};
+                reader.stream.write_all(&serde_json::to_vec(&resp)?)?
+            },
+            err => {
+                println!("ParseErr: {:?}", err);
+                reader.stream.write_all(&msg)?;
+            }
         }
         sleep(Duration::from_millis(200));
     }
+    println!("Exited Abnormally");
     Ok(())
 }
 fn main() {
-    tcp_accept_and_spawn(([0,0,0,0], 7).into(), handle_request).unwrap();
+    tcp_accept_and_spawn(([0,0,0,0], 6969).into(), handle_request).unwrap();
 }

@@ -1,7 +1,15 @@
-use std::{io::{Error, Read, Write}, net::{Shutdown, SocketAddr, TcpListener, TcpStream}, thread};
+use std::{
+    io::{Error, Read, Write},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    thread,
+};
 
-pub fn tcp_accept_and_spawn(bind_addr: SocketAddr, callback: fn(TcpStream) -> Result<(), Error>) -> Result<(), Error> {
+pub fn tcp_accept_and_spawn(
+    bind_addr: SocketAddr,
+    callback: fn(TcpStream) -> Result<(), Error>,
+) -> Result<(), Error> {
     let listener = TcpListener::bind(bind_addr)?;
+    println!("Listening: {:?}", listener);
     for conn in listener.incoming() {
         match conn {
             Err(conn) => {
@@ -9,7 +17,7 @@ pub fn tcp_accept_and_spawn(bind_addr: SocketAddr, callback: fn(TcpStream) -> Re
             }
             Ok(conn) => {
                 println!("Spawning Thread for: {:?}", conn);
-                thread::spawn(move|| {
+                thread::spawn(move || {
                     callback(conn).unwrap();
                 });
             }

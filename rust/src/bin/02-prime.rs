@@ -2,8 +2,8 @@ use primes::is_prime;
 use protohackers::tcp_accept_and_spawn;
 use serde::Deserialize;
 use serde::Serialize;
-use std::error::Error;
 use std::collections::VecDeque;
+use std::error::Error;
 use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream},
@@ -51,9 +51,7 @@ impl MessageReader {
         // index of delimiter
         let mut split = VecDeque::<Vec<u8>>::from([vec![]]);
         for b in buf {
-            split.back_mut()
-                 .expect("Should not be empty")
-                 .push(*b);
+            split.back_mut().expect("Should not be empty").push(*b);
             if *b == self.delimiter {
                 split.push_back(vec![]);
                 continue;
@@ -82,11 +80,11 @@ impl MessageReader {
             }
         }
     }
- 
+
     fn deserialize(msg: IsPrimeRpcResponse) -> Result<Vec<u8>, Box<dyn Error>> {
         match serde_json::to_vec(&msg) {
             Ok(msg) => Ok(msg),
-            Err(e) => Err(Box::new(e))
+            Err(e) => Err(Box::new(e)),
         }
     }
 
@@ -111,7 +109,7 @@ impl MessageReader {
                             .front_mut()
                             .expect("Front should not be empty")
                             .extend_from_slice(chunk);
-                    },
+                    }
                     chunks => {
                         println!("Buffer: {:?}", chunks);
                         let split = &mut self.split_buf(chunks)?;
@@ -122,11 +120,10 @@ impl MessageReader {
                             .append(&mut front);
                         self.queue.append(split);
                         break;
-                    } 
+                    }
                 }
             }
         }
-
     }
 }
 
@@ -134,22 +131,27 @@ fn handle_request(stream: TcpStream) -> Result<(), Box<dyn Error>> {
     let mut reader = MessageReader::new(stream, 10);
     loop {
         match reader.next_message() {
-            Ok(None) => { return Ok(()); },
-            Err(e) => { return Err(e); },
-            Ok(Some(msg)) => {
-                match MessageReader::serialize(msg.clone()) {
-                    Ok(serialized) if serialized.method == "isPrime" => {
-                        let resp = IsPrimeRpcResponse{method: "isPrime".to_owned(), prime: is_primez(serialized.number)};
-                        let mut deserialized = MessageReader::deserialize(resp)?;
-                        deserialized.push(reader.delimiter);
-                        reader.stream.write_all(&deserialized)?;
-                    }
-                    _ => {
-                        println!("BadReq Response: {:?}", msg);
-                        reader.stream.write_all(msg.as_slice())?;
-                    }
-                }
+            Ok(None) => {
+                return Ok(());
             }
+            Err(e) => {
+                return Err(e);
+            }
+            Ok(Some(msg)) => match MessageReader::serialize(msg.clone()) {
+                Ok(serialized) if serialized.method == "isPrime" => {
+                    let resp = IsPrimeRpcResponse {
+                        method: "isPrime".to_owned(),
+                        prime: is_primez(serialized.number),
+                    };
+                    let mut deserialized = MessageReader::deserialize(resp)?;
+                    deserialized.push(reader.delimiter);
+                    reader.stream.write_all(&deserialized)?;
+                }
+                _ => {
+                    println!("BadReq Response: {:?}", msg);
+                    reader.stream.write_all(msg.as_slice())?;
+                }
+            },
         }
     }
 }

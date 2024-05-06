@@ -7,9 +7,6 @@ use std::collections::VecDeque;
 use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream},
-    ops::Index,
-    thread::sleep,
-    time::Duration,
     vec,
 };
 /// {"method":"isPrime","number":123}\n
@@ -80,6 +77,7 @@ impl MessageReader {
             }
             Err(e) => {
                 println!("ParseErr: {:?}", e);
+                println!("{}", String::from_utf8_lossy(&msg));
                 Err(Box::new(e))
             }
         }
@@ -96,17 +94,13 @@ impl MessageReader {
         loop {
             // if msg in queue, pop+return
             if let Some(msg) = self.pop_if_ready() {
-                if self.queue.is_empty() {
-                    self.queue.push_front(vec![]);
-                }
                 return Ok(Some(msg));
             }
             // read data appending to the message queue
             loop {
-                println!("Starting read");
                 let read = self.stream.read(&mut self.buf)?;
-                println!("Read: {}", read);
                 if read == 0 {
+                    self.stream.shutdown(Shutdown::Both)?;
                     return Ok(None);
                 }
 
@@ -146,7 +140,9 @@ fn handle_request(stream: TcpStream) -> Result<(), Box<dyn Error>> {
                 match MessageReader::serialize(msg.clone()) {
                     Ok(serialized) if serialized.method == "isPrime" => {
                         let resp = IsPrimeRpcResponse{method: "isPrime".to_owned(), prime: is_primez(serialized.number)};
-                        reader.stream.write_all(MessageReader::deserialize(resp)?.as_slice())?;
+                        let mut deserialized = MessageReader::deserialize(resp)?;
+                        deserialized.push(reader.delimiter);
+                        reader.stream.write_all(&deserialized)?;
                     }
                     _ => {
                         println!("BadReq Response: {:?}", msg);

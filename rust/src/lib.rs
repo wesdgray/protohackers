@@ -1,13 +1,14 @@
 use std::{
-    io::{Error, Read, Write},
+    io::{Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     thread,
 };
+use std::error::Error;
 
 pub fn tcp_accept_and_spawn(
     bind_addr: SocketAddr,
-    callback: fn(TcpStream) -> Result<(), Error>,
-) -> Result<(), Error> {
+    callback: fn(TcpStream) -> Result<(), Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(bind_addr)?;
     println!("Listening: {:?}", listener);
     for conn in listener.incoming() {
@@ -26,7 +27,7 @@ pub fn tcp_accept_and_spawn(
     Ok(())
 }
 
-pub fn echo_server(mut tcp_stream: TcpStream) -> Result<(), Error> {
+pub fn echo_server(mut tcp_stream: TcpStream) -> Result<(), Box<dyn Error>> {
     let mut buf: [u8; 1024] = [0; 1024];
     loop {
         let read = tcp_stream.read(&mut buf).unwrap();

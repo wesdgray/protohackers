@@ -1,21 +1,29 @@
-use std::{io::{Error, Read, Write}, net::{Shutdown, TcpStream}, ops::Index, thread::sleep, time::Duration, vec};
+use primes::is_prime;
 use protohackers::tcp_accept_and_spawn;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::from_slice;
-use primes::is_prime;
+use std::error::Error;
+use std::collections::VecDeque;
+use std::{
+    io::{Read, Write},
+    net::{Shutdown, TcpStream},
+    ops::Index,
+    thread::sleep,
+    time::Duration,
+    vec,
+};
 /// {"method":"isPrime","number":123}\n
 #[derive(Serialize, Deserialize, Debug)]
 struct RpcRequest {
     method: String,
-    number: i128
+    number: i128,
 }
 
 /// {"method": "isPrime", "prime": true}\n
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct IsPrimeRpcResponse {
     method: String,
-    prime: bool
+    prime: bool,
 }
 
 fn is_primez(num: i128) -> bool {
@@ -28,65 +36,127 @@ fn is_primez(num: i128) -> bool {
 struct MessageReader {
     stream: TcpStream,
     delimiter: u8,
-    buf: [u8;128],
-    req: Vec<u8>
+    buf: [u8; 128],
+    queue: VecDeque<Vec<u8>>,
 }
-
 
 impl MessageReader {
     fn new(stream: TcpStream, delimiter: u8) -> MessageReader {
-        MessageReader{
+        MessageReader {
             stream,
             delimiter,
             buf: [0; 128],
-            req: vec![],
+            queue: VecDeque::from([vec![]]),
         }
     }
 
-    fn next_message(&mut self) -> Result<Option<Vec<u8>>, Error> {
-        loop {
-            let read = self.stream.read(&mut self.buf)?;
-            if read == 0 {
-                return Ok(None);
-            }
-
-            if let Some((index, _)) = self.buf.iter().enumerate().find(|(_,v)| **v == self.delimiter) {
-                if index - 1 == self.req.len(){
-                    self.req.clear();
-                } else {
-                    self.req = self.buf[index+1..].to_vec();
-                }
-                let left = &self.buf[0..index];
-                return Ok(Some(left.to_vec()));
+    fn split_buf(&self, buf: &[u8]) -> Result<VecDeque<Vec<u8>>, Box<dyn Error>> {
+        // index of delimiter
+        let mut split = VecDeque::<Vec<u8>>::from([vec![]]);
+        for b in buf {
+            split.back_mut()
+                 .expect("Should not be empty")
+                 .push(*b);
+            if *b == self.delimiter {
+                split.push_back(vec![]);
+                continue;
             }
         }
+        Ok(split)
+    }
+
+    fn pop_if_ready(&mut self) -> Option<Vec<u8>> {
+        match self.queue.front()?.last() {
+            Some(last) if last == &self.delimiter => self.queue.pop_front(),
+            _ => None,
+        }
+    }
+
+    fn serialize(msg: Vec<u8>) -> Result<RpcRequest, Box<dyn Error>> {
+        match serde_json::from_slice::<RpcRequest>(&msg) {
+            Ok(parsed) => {
+                println!("Parsed: {:?}", parsed);
+                Ok(parsed)
+            }
+            Err(e) => {
+                println!("ParseErr: {:?}", e);
+                Err(Box::new(e))
+            }
+        }
+    }
+ 
+    fn deserialize(msg: IsPrimeRpcResponse) -> Result<Vec<u8>, Box<dyn Error>> {
+        match serde_json::to_vec(&msg) {
+            Ok(msg) => Ok(msg),
+            Err(e) => Err(Box::new(e))
+        }
+    }
+
+    fn next_message(&mut self) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        loop {
+            // if msg in queue, pop+return
+            if let Some(msg) = self.pop_if_ready() {
+                if self.queue.is_empty() {
+                    self.queue.push_front(vec![]);
+                }
+                return Ok(Some(msg));
+            }
+            // read data appending to the message queue
+            loop {
+                println!("Starting read");
+                let read = self.stream.read(&mut self.buf)?;
+                println!("Read: {}", read);
+                if read == 0 {
+                    return Ok(None);
+                }
+
+                match &self.buf[0..read] {
+                    chunk if !chunk.contains(&self.delimiter) => {
+                        println!("Buffer: {:?}", chunk);
+                        self.queue
+                            .front_mut()
+                            .expect("Front should not be empty")
+                            .extend_from_slice(chunk);
+                    },
+                    chunks => {
+                        println!("Buffer: {:?}", chunks);
+                        let split = &mut self.split_buf(chunks)?;
+                        let mut front = split.pop_front().expect("Front should not be empty");
+                        self.queue
+                            .front_mut()
+                            .expect("Front should not be empty")
+                            .append(&mut front);
+                        self.queue.append(split);
+                        break;
+                    } 
+                }
+            }
+        }
+
     }
 }
 
-fn handle_request(stream: TcpStream) -> Result<(), Error> {
+fn handle_request(stream: TcpStream) -> Result<(), Box<dyn Error>> {
     let mut reader = MessageReader::new(stream, 10);
-    while let Some(msg) = reader.next_message().transpose() {
-        let msg = match msg {
-            Err(e) => return Err(e),
-            Ok(m) => m
-        };
-        println!("Message: {}", String::from_utf8_lossy(&msg));
-        match serde_json::from_slice::<RpcRequest>(&msg) {
-            Ok(parsed) if parsed.method == "isPrime" => {
-                println!("Parsed: {:?}", parsed);
-                let resp = IsPrimeRpcResponse{method: "isPrime".to_owned(), prime: is_primez(parsed.number)};
-                reader.stream.write_all(&serde_json::to_vec(&resp)?)?
-            },
-            err => {
-                println!("ParseErr: {:?}", err);
-                reader.stream.write_all(&msg)?;
+    loop {
+        match reader.next_message() {
+            Ok(None) => { return Ok(()); },
+            Err(e) => { return Err(e); },
+            Ok(Some(msg)) => {
+                match MessageReader::serialize(msg.clone()) {
+                    Ok(serialized) if serialized.method == "isPrime" => {
+                        let resp = IsPrimeRpcResponse{method: "isPrime".to_owned(), prime: is_primez(serialized.number)};
+                        reader.stream.write_all(MessageReader::deserialize(resp)?.as_slice())?;
+                    }
+                    _ => {
+                        println!("BadReq Response: {:?}", msg);
+                        reader.stream.write_all(msg.as_slice())?;
+                    }
+                }
             }
         }
-        sleep(Duration::from_millis(200));
     }
-    println!("Exited Abnormally");
-    Ok(())
 }
 fn main() {
-    tcp_accept_and_spawn(([0,0,0,0], 6969).into(), handle_request).unwrap();
+    tcp_accept_and_spawn(([0, 0, 0, 0], 6969).into(), handle_request).unwrap();
 }

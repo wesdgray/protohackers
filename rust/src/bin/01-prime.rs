@@ -1,4 +1,5 @@
-use primes::is_prime;
+use ibig::IBig;
+use ibig::ibig;
 use protohackers::tcp_accept_and_spawn;
 use serde::Deserialize;
 use serde::Serialize;
@@ -13,7 +14,7 @@ use std::{
 #[derive(Serialize, Deserialize, Debug)]
 struct RpcRequest {
     method: String,
-    number: i128,
+    number: IBig,
 }
 
 /// {"method": "isPrime", "prime": true}\n
@@ -23,11 +24,20 @@ struct IsPrimeRpcResponse {
     prime: bool,
 }
 
-fn is_primez(num: i128) -> bool {
-    if num < 0 {
+fn is_prime(num: IBig) -> bool {
+    if num < ibig!(0) {
         return false;
     }
-    is_prime(num as u64)
+
+    let mut x = ibig!(2);
+    while x < num {
+        let div = num.clone() % x.clone();
+        if div == ibig!(0) {
+            return false;
+        }
+        x += 1;
+    }
+    true
 }
 
 struct MessageReader {
@@ -141,7 +151,7 @@ fn handle_request(stream: TcpStream) -> Result<(), Box<dyn Error>> {
                 Ok(serialized) if serialized.method == "isPrime" => {
                     let resp = IsPrimeRpcResponse {
                         method: "isPrime".to_owned(),
-                        prime: is_primez(serialized.number),
+                        prime: is_prime(serialized.number),
                     };
                     let mut deserialized = MessageReader::deserialize(resp)?;
                     deserialized.push(reader.delimiter);

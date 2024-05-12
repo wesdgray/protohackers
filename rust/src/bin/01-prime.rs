@@ -1,20 +1,22 @@
-use ibig::IBig;
-use ibig::ibig;
+use num_bigint::Sign;
 use protohackers::tcp_accept_and_spawn;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::error::Error;
+use std::str::FromStr;
 use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream},
     vec,
 };
+use num_bigint::BigInt;
+use serde_json::Number;
 /// {"method":"isPrime","number":123}\n
 #[derive(Serialize, Deserialize, Debug)]
 struct RpcRequest {
     method: String,
-    number: IBig,
+    number: Number,
 }
 
 /// {"method": "isPrime", "prime": true}\n
@@ -24,20 +26,25 @@ struct IsPrimeRpcResponse {
     prime: bool,
 }
 
-fn is_prime(num: IBig) -> bool {
-    if num < ibig!(0) {
-        return false;
-    }
-
-    let mut x = ibig!(2);
-    while x < num {
-        let div = num.clone() % x.clone();
-        if div == ibig!(0) {
-            return false;
+fn is_prime(num: Number) -> bool {
+    match BigInt::from_str(num.to_string().as_str()) {
+        Err(_) => false,
+        Ok(num) if num < BigInt::ZERO + 2 => false,
+        Ok(num) => {
+            let max = num.sqrt();
+            let mut x: BigInt = BigInt::ZERO + 2;
+            while x <= max {
+                let modulo = num.clone() % x.clone();
+                // println!("x:{:?}\tmax:{:?}\t{:?}", x, max, modulo);
+                if modulo == BigInt::ZERO {
+                    return false;
+                }
+                x += 1;
+            }
+            // println!("x:{:?}\nmax:{:?}", x, max);
+            true
         }
-        x += 1;
     }
-    true
 }
 
 struct MessageReader {
